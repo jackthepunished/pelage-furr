@@ -56,22 +56,92 @@ void FurRenderer::Update(float deltaTime) {
     frameData.WindStrength = 0.2f;
     frameData.WindDirection = XMFLOAT3(1.0f, 0.0f, 0.0f);
     
+    // Light Frame
+    float lightRadius = 5.0f;
+    XMFLOAT3 lightPosF3 = XMFLOAT3(lightRadius, lightRadius, -lightRadius);
+    XMVECTOR lightPos = XMLoadFloat3(&lightPosF3);
+    XMMATRIX lightView = XMMatrixLookAtLH(lightPos, target, up);
+    XMMATRIX lightProj = XMMatrixOrthographicLH(5.0f, 5.0f, 0.1f, 20.0f);
+    XMMATRIX lightVP = lightView * lightProj;
+    frameData.LightViewProj = XMMatrixTranspose(lightVP);
+
     memcpy(m_frameCBMapped, &frameData, sizeof(FrameCB));
+
+    FrameCB lightData = frameData;
+    lightData.CameraPos = lightPosF3; 
+    lightData.ViewProj = frameData.LightViewProj; // For OSM Pass
+    
+    memcpy(m_lightFrameCBMapped, &lightData, sizeof(FrameCB));
 }
 
 void FurRenderer::Render() {
-    // Basic clearing to blue for now
     HRESULT hr = m_commandAllocator->Reset();
     hr = m_commandList->Reset(m_commandAllocator.Get(), nullptr);
 
-    // Transition MSAA target to Render Target
+    // ==========================================
+    // Pass 1: OSM Shadows
+    // ==========================================
+    D3D12_RESOURCE_BARRIER osmBarriers[4];
+    for(int i = 0; i < 4; i++) {
+        osmBarriers[i] = CD3DX12_RESOURCE_BARRIER::Transition(
+            m_osmTextures[i].Get(),
+            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+            D3D12_RESOURCE_STATE_RENDER_TARGET);
+    }
+    m_commandList->ResourceBarrier(4, osmBarriers);
+
+    CD3DX12_CPU_DESCRIPTOR_HANDLE osmRtvHandle(
+        m_rtvHeap->GetCPUDescriptorHandleForHeapStart(),
+        SwapChainBufferCount + 1, m_rtvDescriptorSize);
+
+    D3D12_CPU_DESCRIPTOR_HANDLE osmRtvs[4];
+    for(int i = 0; i < 4; i++) {
+        osmRtvs[i] = osmRtvHandle;
+        const float clearZero[] = { 0.0f, 0.0f, 0.0f, 0.0f };
+        m_commandList->ClearRenderTargetView(osmRtvHandle, clearZero, 0, nullptr);
+        osmRtvHandle.Offset(1, m_rtvDescriptorSize);
+    }
+
+    m_commandList->OMSetRenderTargets(4, osmRtvs, FALSE, nullptr);
+    
+    D3D12_VIEWPORT osmViewport = { 0.0f, 0.0f, 1024.0f, 1024.0f, 0.0f, 1.0f };
+    D3D12_RECT osmScissor = { 0, 0, 1024, 1024 };
+    m_commandList->RSSetViewports(1, &osmViewport);
+    m_commandList->RSSetScissorRects(1, &osmScissor);
+
+    m_commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    m_commandList->IASetVertexBuffers(0, 1, &m_vertexBufferView);
+    m_commandList->IASetIndexBuffer(&m_indexBufferView);
+
+    m_commandList->SetPipelineState(m_osmPSO.Get());
+    m_commandList->SetGraphicsRootSignature(m_commonRootSignature.Get());
+
+    ID3D12DescriptorHeap* descriptorHeaps[] = { m_cbvSrvUavHeap.Get() };
+    m_commandList->SetDescriptorHeaps(1, descriptorHeaps);
+
+    m_commandList->SetGraphicsRootConstantBufferView(0, m_lightFrameCB->GetGPUVirtualAddress());
+    m_commandList->SetGraphicsRootConstantBufferView(1, m_furCB->GetGPUVirtualAddress());
+    m_commandList->SetGraphicsRootDescriptorTable(2, m_cbvSrvUavHeap->GetGPUDescriptorHandleForHeapStart());
+    
+    m_commandList->DrawIndexedInstanced(m_indexCount, 32, 0, 0, 0);
+
+    for(int i = 0; i < 4; i++) {
+        osmBarriers[i] = CD3DX12_RESOURCE_BARRIER::Transition(
+            m_osmTextures[i].Get(),
+            D3D12_RESOURCE_STATE_RENDER_TARGET,
+            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    }
+    m_commandList->ResourceBarrier(4, osmBarriers);
+
+    // ==========================================
+    // Pass 2: Main Render (MSAA Target)
+    // ==========================================
     CD3DX12_RESOURCE_BARRIER transitionToRT = CD3DX12_RESOURCE_BARRIER::Transition(
         m_msaaRenderTarget.Get(),
         D3D12_RESOURCE_STATE_RESOLVE_SOURCE,
         D3D12_RESOURCE_STATE_RENDER_TARGET);
     m_commandList->ResourceBarrier(1, &transitionToRT);
 
-    // We get the MSAA handle which is at offset SwapChainBufferCount
     CD3DX12_CPU_DESCRIPTOR_HANDLE msaaRtvHandle(
         m_rtvHeap->GetCPUDescriptorHandleForHeapStart(),
         SwapChainBufferCount, m_rtvDescriptorSize);
@@ -81,7 +151,6 @@ void FurRenderer::Render() {
     const float clearColor[] = { 0.0f, 0.2f, 0.4f, 1.0f };
     m_commandList->ClearRenderTargetView(msaaRtvHandle, clearColor, 0, nullptr);
 
-    // Basic Draw
     m_commandList->RSSetViewports(1, &m_viewport);
     m_commandList->RSSetScissorRects(1, &m_scissorRect);
     
@@ -89,35 +158,30 @@ void FurRenderer::Render() {
     m_commandList->IASetVertexBuffers(0, 1, &m_vertexBufferView);
     m_commandList->IASetIndexBuffer(&m_indexBufferView);
 
-    m_commandList->SetPipelineState(m_shellPSO.Get());
-    m_commandList->SetGraphicsRootSignature(m_commonRootSignature.Get());
-
-    ID3D12DescriptorHeap* descriptorHeaps[] = { m_cbvSrvUavHeap.Get() };
-    m_commandList->SetDescriptorHeaps(_countof(descriptorHeaps), descriptorHeaps);
-
-    // Bind CBVs
     m_commandList->SetGraphicsRootConstantBufferView(0, m_frameCB->GetGPUVirtualAddress());
     m_commandList->SetGraphicsRootConstantBufferView(1, m_furCB->GetGPUVirtualAddress());
-
-    // Bind SRVs (Noise)
     m_commandList->SetGraphicsRootDescriptorTable(2, m_cbvSrvUavHeap->GetGPUDescriptorHandleForHeapStart());
     
-    // Bind OSM Shadows (Just mock with noise for now to avoid crash)
-    m_commandList->SetGraphicsRootDescriptorTable(3, m_cbvSrvUavHeap->GetGPUDescriptorHandleForHeapStart());
+    // Bind OSM SRVs at offset 1 from the heap start
+    CD3DX12_GPU_DESCRIPTOR_HANDLE osmSrvHandle(m_cbvSrvUavHeap->GetGPUDescriptorHandleForHeapStart());
+    osmSrvHandle.Offset(1, m_cbvSrvUavDescriptorSize);
+    m_commandList->SetGraphicsRootDescriptorTable(3, osmSrvHandle);
 
-    // Draw Fins first
+    // Fins
     m_commandList->SetPipelineState(m_finPSO.Get());
     m_commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST_ADJ);
     m_commandList->IASetIndexBuffer(&m_indexBufferAdjView);
     m_commandList->DrawIndexedInstanced(m_indexCountAdj, 1, 0, 0, 0);
 
-    // Draw 32 layers for Shells
+    // Shells
     m_commandList->SetPipelineState(m_shellPSO.Get());
     m_commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     m_commandList->IASetIndexBuffer(&m_indexBufferView);
     m_commandList->DrawIndexedInstanced(m_indexCount, 32, 0, 0, 0);
 
-    // Transition MSAA target to Resolve Source, Backbuffer to Resolve Dest
+    // ==========================================
+    // Pass 3: Resolve & Present
+    // ==========================================
     D3D12_RESOURCE_BARRIER resolveBarriers[2];
     resolveBarriers[0] = CD3DX12_RESOURCE_BARRIER::Transition(
         m_msaaRenderTarget.Get(),
@@ -129,13 +193,11 @@ void FurRenderer::Render() {
         D3D12_RESOURCE_STATE_RESOLVE_DEST);
     m_commandList->ResourceBarrier(2, resolveBarriers);
 
-    // Resolve MSAA to swap chain backbuffer
     m_commandList->ResolveSubresource(
         m_swapChainBuffer[m_currentBackBuffer].Get(), 0,
         m_msaaRenderTarget.Get(), 0,
         DXGI_FORMAT_R8G8B8A8_UNORM);
 
-    // Transition backbuffer to Present
     CD3DX12_RESOURCE_BARRIER presentBarrier = CD3DX12_RESOURCE_BARRIER::Transition(
         m_swapChainBuffer[m_currentBackBuffer].Get(),
         D3D12_RESOURCE_STATE_RESOLVE_DEST,
@@ -143,13 +205,10 @@ void FurRenderer::Render() {
     m_commandList->ResourceBarrier(1, &presentBarrier);
 
     hr = m_commandList->Close();
-
     ID3D12CommandList* cmdsLists[] = { m_commandList.Get() };
     m_commandQueue->ExecuteCommandLists(1, cmdsLists);
 
     ThrowIfFailed(m_swapChain->Present(1, 0));
-
-    // Wait (terrible for perf but simple for scaffolding)
     FlushCommandQueue();
 
     m_currentBackBuffer = (m_currentBackBuffer + 1) % SwapChainBufferCount;
@@ -223,7 +282,7 @@ void FurRenderer::CreateSwapChain() {
 
 void FurRenderer::CreateRtvAndDsvDescriptorHeaps() {
     D3D12_DESCRIPTOR_HEAP_DESC rtvHeapDesc;
-    rtvHeapDesc.NumDescriptors = SwapChainBufferCount + 1; // +1 for MSAA Render Target
+    rtvHeapDesc.NumDescriptors = SwapChainBufferCount + 1 + 4; // +1 for MSAA Render Target, +4 for OSM
     rtvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
     rtvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
     rtvHeapDesc.NodeMask = 0;
@@ -257,6 +316,34 @@ void FurRenderer::CreateRtvAndDsvDescriptorHeaps() {
         IID_PPV_ARGS(&m_msaaRenderTarget)));
         
     m_device->CreateRenderTargetView(m_msaaRenderTarget.Get(), nullptr, rtvHandle);
+    rtvHandle.Offset(1, m_rtvDescriptorSize);
+
+    // Create OSM Render Targets
+    D3D12_RESOURCE_DESC osmRTDesc = CD3DX12_RESOURCE_DESC::Tex2D(
+        DXGI_FORMAT_R8_UNORM, 1024, 1024, 1, 1, 1, 0, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET);
+    
+    D3D12_CLEAR_VALUE osmClear;
+    osmClear.Format = DXGI_FORMAT_R8_UNORM;
+    osmClear.Color[0] = 0.0f;
+    osmClear.Color[1] = 0.0f;
+    osmClear.Color[2] = 0.0f;
+    osmClear.Color[3] = 0.0f;
+
+    for (int i = 0; i < 4; i++) {
+        ThrowIfFailed(m_device->CreateCommittedResource(
+            &heapProps,
+            D3D12_HEAP_FLAG_NONE,
+            &osmRTDesc,
+            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+            &osmClear,
+            IID_PPV_ARGS(&m_osmTextures[i])));
+
+        D3D12_RENDER_TARGET_VIEW_DESC osmRTVDesc = {};
+        osmRTVDesc.Format = DXGI_FORMAT_R8_UNORM;
+        osmRTVDesc.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D;
+        m_device->CreateRenderTargetView(m_osmTextures[i].Get(), &osmRTVDesc, rtvHandle);
+        rtvHandle.Offset(1, m_rtvDescriptorSize);
+    }
 
     // SRV Heap
     D3D12_DESCRIPTOR_HEAP_DESC srvHeapDesc = {};
@@ -426,6 +513,14 @@ void FurRenderer::CreateConstantBuffers() {
         nullptr,
         IID_PPV_ARGS(&m_frameCB)));
 
+    ThrowIfFailed(m_device->CreateCommittedResource(
+        &uploadHeapProps,
+        D3D12_HEAP_FLAG_NONE,
+        &frameCBDesc,
+        D3D12_RESOURCE_STATE_GENERIC_READ,
+        nullptr,
+        IID_PPV_ARGS(&m_lightFrameCB)));
+
     CD3DX12_RESOURCE_DESC furCBDesc = CD3DX12_RESOURCE_DESC::Buffer(furCBSize);
     ThrowIfFailed(m_device->CreateCommittedResource(
         &uploadHeapProps,
@@ -438,6 +533,7 @@ void FurRenderer::CreateConstantBuffers() {
     // Map them
     CD3DX12_RANGE readRange(0, 0); // No reading on CPU
     ThrowIfFailed(m_frameCB->Map(0, &readRange, reinterpret_cast<void**>(&m_frameCBMapped)));
+    ThrowIfFailed(m_lightFrameCB->Map(0, &readRange, reinterpret_cast<void**>(&m_lightFrameCBMapped)));
     ThrowIfFailed(m_furCB->Map(0, &readRange, reinterpret_cast<void**>(&m_furCBMapped)));
 
     // Initialize Fur Parameters with recommended defaults
@@ -559,7 +655,7 @@ void FurRenderer::BuildRenderItems() {
     CD3DX12_RESOURCE_BARRIER transitionToSRV = CD3DX12_RESOURCE_BARRIER::Transition(m_noiseTex.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
     m_commandList->ResourceBarrier(1, &transitionToSRV);
 
-    // Create SRV in heap for 5 slots to avoid uninitialized descriptor crashes
+    // Create SRV in heap for noise (1 slot) and OSM (4 slots)
     D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
     srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
     srvDesc.Format = texDesc.Format;
@@ -568,8 +664,16 @@ void FurRenderer::BuildRenderItems() {
     srvDesc.Texture2D.MipLevels = 1;
     
     CD3DX12_CPU_DESCRIPTOR_HANDLE hDescriptor(m_cbvSrvUavHeap->GetCPUDescriptorHandleForHeapStart());
-    for(int i = 0; i < 5; ++i) {
-        m_device->CreateShaderResourceView(m_noiseTex.Get(), &srvDesc, hDescriptor);
+    
+    // Slot 0: Noise
+    m_device->CreateShaderResourceView(m_noiseTex.Get(), &srvDesc, hDescriptor);
+    hDescriptor.Offset(1, m_cbvSrvUavDescriptorSize);
+    
+    // Slot 1-4: OSM Textures
+    D3D12_SHADER_RESOURCE_VIEW_DESC osmSrvDesc = srvDesc;
+    osmSrvDesc.Format = DXGI_FORMAT_R8_UNORM;
+    for(int i = 0; i < 4; ++i) {
+        m_device->CreateShaderResourceView(m_osmTextures[i].Get(), &osmSrvDesc, hDescriptor);
         hDescriptor.Offset(1, m_cbvSrvUavDescriptorSize);
     }
 

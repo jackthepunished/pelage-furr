@@ -1,6 +1,7 @@
 struct FrameCB {
     float4x4 ViewProj;
     float4x4 World;
+    float4x4 LightViewProj;
     float3 CameraPos;
     float Time;
     float3 Gravity;

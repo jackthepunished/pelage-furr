@@ -40,6 +40,7 @@ private:
     struct FrameCB {
         XMMATRIX ViewProj;
         XMMATRIX World;
+        XMMATRIX LightViewProj; // Added LightViewProj
         XMFLOAT3 CameraPos;
         float Time;
         XMFLOAT3 Gravity;
@@ -100,9 +101,14 @@ private:
     ComPtr<ID3D12DescriptorHeap> m_msaaRtvHeap;
     ComPtr<ID3D12Resource> m_noiseTex;
     ComPtr<ID3D12Resource> m_frameCB;
+    ComPtr<ID3D12Resource> m_lightFrameCB;
     ComPtr<ID3D12Resource> m_furCB;
     UINT8* m_frameCBMapped = nullptr;
+    UINT8* m_lightFrameCBMapped = nullptr;
     UINT8* m_furCBMapped = nullptr;
+    
+    ComPtr<ID3D12Resource> m_osmTextures[4];
+    ComPtr<ID3D12DescriptorHeap> m_osmRtvHeap;
 
     ComPtr<ID3D12Resource> m_vertexBuffer;
     ComPtr<ID3D12Resource> m_indexBuffer;

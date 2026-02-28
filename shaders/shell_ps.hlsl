@@ -1,6 +1,7 @@
 struct FrameCB {
     float4x4 ViewProj;
     float4x4 World;
+    float4x4 LightViewProj;
     float3 CameraPos;
     float Time;
     float3 Gravity;
@@ -21,6 +22,7 @@ struct FurCB {
 ConstantBuffer<FurCB> g_Fur : register(b1);
 
 Texture2D<float> g_NoiseTex : register(t0);
+Texture2D<float> g_OsmTex[4] : register(t1);
 SamplerState g_SamLinear : register(s0);
 
 struct VS_OUT {
@@ -77,7 +79,27 @@ float4 main(VS_OUT input) : SV_TARGET {
     float3 diffuseLight = g_Fur.FurColor * diffuse * 0.85f;
     float3 specularLight = float3(1.0f, 0.9f, 0.8f) * (specular + secondarySpecular) * 0.6f; // Slightly warm
     
-    float3 lighting = ambient + diffuseLight + specularLight;
+    // OSM Shadowing
+    float4 posLightCS = mul(float4(input.PosWS, 1.0f), g_Frame.LightViewProj);
+    posLightCS.xyz /= posLightCS.w;
+    
+    // Convert NDC to UV
+    float2 shadowUV = posLightCS.xy * float2(0.5f, -0.5f) + float2(0.5f, 0.5f);
+    
+    float shadowFactor = 1.0f;
+    if (shadowUV.x >= 0.0f && shadowUV.x <= 1.0f && shadowUV.y >= 0.0f && shadowUV.y <= 1.0f) {
+        // Sample all 4 layers
+        float accumulatedOpacity = 0.0f;
+        accumulatedOpacity += g_OsmTex[0].Sample(g_SamLinear, shadowUV).r;
+        accumulatedOpacity += g_OsmTex[1].Sample(g_SamLinear, shadowUV).r;
+        accumulatedOpacity += g_OsmTex[2].Sample(g_SamLinear, shadowUV).r;
+        accumulatedOpacity += g_OsmTex[3].Sample(g_SamLinear, shadowUV).r;
+        
+        // Deep shadow using Beer's Law approximation
+        shadowFactor = exp(-accumulatedOpacity * 5.0f);
+    }
+    
+    float3 lighting = ambient + (diffuseLight + specularLight) * shadowFactor;
     
     // Darken roots for pseudo-AO
     lighting *= lerp(0.3f, 1.0f, input.NormalizedHeight);
