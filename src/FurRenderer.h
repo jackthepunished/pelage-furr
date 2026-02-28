@@ -96,6 +96,8 @@ private:
     ComPtr<ID3D12PipelineState> m_opaquePSO;
 
     // Buffers and Textures
+    ComPtr<ID3D12Resource> m_msaaRenderTarget;
+    ComPtr<ID3D12DescriptorHeap> m_msaaRtvHeap;
     ComPtr<ID3D12Resource> m_noiseTex;
     ComPtr<ID3D12Resource> m_frameCB;
     ComPtr<ID3D12Resource> m_furCB;

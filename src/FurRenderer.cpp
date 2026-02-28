@@ -64,20 +64,22 @@ void FurRenderer::Render() {
     HRESULT hr = m_commandAllocator->Reset();
     hr = m_commandList->Reset(m_commandAllocator.Get(), nullptr);
 
-    CD3DX12_RESOURCE_BARRIER transition = CD3DX12_RESOURCE_BARRIER::Transition(
-        m_swapChainBuffer[m_currentBackBuffer].Get(),
-        D3D12_RESOURCE_STATE_PRESENT,
+    // Transition MSAA target to Render Target
+    CD3DX12_RESOURCE_BARRIER transitionToRT = CD3DX12_RESOURCE_BARRIER::Transition(
+        m_msaaRenderTarget.Get(),
+        D3D12_RESOURCE_STATE_RESOLVE_SOURCE,
         D3D12_RESOURCE_STATE_RENDER_TARGET);
-    m_commandList->ResourceBarrier(1, &transition);
+    m_commandList->ResourceBarrier(1, &transitionToRT);
 
-    CD3DX12_CPU_DESCRIPTOR_HANDLE rtvHandle(
+    // We get the MSAA handle which is at offset SwapChainBufferCount
+    CD3DX12_CPU_DESCRIPTOR_HANDLE msaaRtvHandle(
         m_rtvHeap->GetCPUDescriptorHandleForHeapStart(),
-        m_currentBackBuffer, m_rtvDescriptorSize);
+        SwapChainBufferCount, m_rtvDescriptorSize);
 
-    m_commandList->OMSetRenderTargets(1, &rtvHandle, FALSE, nullptr);
+    m_commandList->OMSetRenderTargets(1, &msaaRtvHandle, FALSE, nullptr);
 
     const float clearColor[] = { 0.0f, 0.2f, 0.4f, 1.0f };
-    m_commandList->ClearRenderTargetView(rtvHandle, clearColor, 0, nullptr);
+    m_commandList->ClearRenderTargetView(msaaRtvHandle, clearColor, 0, nullptr);
 
     // Basic Draw
     m_commandList->RSSetViewports(1, &m_viewport);
@@ -115,12 +117,30 @@ void FurRenderer::Render() {
     m_commandList->IASetIndexBuffer(&m_indexBufferView);
     m_commandList->DrawIndexedInstanced(m_indexCount, 32, 0, 0, 0);
 
-    // Transition back
-    transition = CD3DX12_RESOURCE_BARRIER::Transition(
-        m_swapChainBuffer[m_currentBackBuffer].Get(),
+    // Transition MSAA target to Resolve Source, Backbuffer to Resolve Dest
+    D3D12_RESOURCE_BARRIER resolveBarriers[2];
+    resolveBarriers[0] = CD3DX12_RESOURCE_BARRIER::Transition(
+        m_msaaRenderTarget.Get(),
         D3D12_RESOURCE_STATE_RENDER_TARGET,
+        D3D12_RESOURCE_STATE_RESOLVE_SOURCE);
+    resolveBarriers[1] = CD3DX12_RESOURCE_BARRIER::Transition(
+        m_swapChainBuffer[m_currentBackBuffer].Get(),
+        D3D12_RESOURCE_STATE_PRESENT,
+        D3D12_RESOURCE_STATE_RESOLVE_DEST);
+    m_commandList->ResourceBarrier(2, resolveBarriers);
+
+    // Resolve MSAA to swap chain backbuffer
+    m_commandList->ResolveSubresource(
+        m_swapChainBuffer[m_currentBackBuffer].Get(), 0,
+        m_msaaRenderTarget.Get(), 0,
+        DXGI_FORMAT_R8G8B8A8_UNORM);
+
+    // Transition backbuffer to Present
+    CD3DX12_RESOURCE_BARRIER presentBarrier = CD3DX12_RESOURCE_BARRIER::Transition(
+        m_swapChainBuffer[m_currentBackBuffer].Get(),
+        D3D12_RESOURCE_STATE_RESOLVE_DEST,
         D3D12_RESOURCE_STATE_PRESENT);
-    m_commandList->ResourceBarrier(1, &transition);
+    m_commandList->ResourceBarrier(1, &presentBarrier);
 
     hr = m_commandList->Close();
 
@@ -203,7 +223,7 @@ void FurRenderer::CreateSwapChain() {
 
 void FurRenderer::CreateRtvAndDsvDescriptorHeaps() {
     D3D12_DESCRIPTOR_HEAP_DESC rtvHeapDesc;
-    rtvHeapDesc.NumDescriptors = SwapChainBufferCount;
+    rtvHeapDesc.NumDescriptors = SwapChainBufferCount + 1; // +1 for MSAA Render Target
     rtvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
     rtvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
     rtvHeapDesc.NodeMask = 0;
@@ -215,6 +235,28 @@ void FurRenderer::CreateRtvAndDsvDescriptorHeaps() {
         m_device->CreateRenderTargetView(m_swapChainBuffer[i].Get(), nullptr, rtvHandle);
         rtvHandle.Offset(1, m_rtvDescriptorSize);
     }
+
+    // Create MSAA Render Target
+    D3D12_RESOURCE_DESC msaaRTDesc = CD3DX12_RESOURCE_DESC::Tex2D(
+        DXGI_FORMAT_R8G8B8A8_UNORM, m_width, m_height, 1, 1, 4, 0, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET);
+    
+    D3D12_CLEAR_VALUE msaaClear;
+    msaaClear.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    msaaClear.Color[0] = 0.0f;
+    msaaClear.Color[1] = 0.2f;
+    msaaClear.Color[2] = 0.4f;
+    msaaClear.Color[3] = 1.0f;
+    
+    CD3DX12_HEAP_PROPERTIES heapProps(D3D12_HEAP_TYPE_DEFAULT);
+    ThrowIfFailed(m_device->CreateCommittedResource(
+        &heapProps,
+        D3D12_HEAP_FLAG_NONE,
+        &msaaRTDesc,
+        D3D12_RESOURCE_STATE_RESOLVE_SOURCE, // Start in resolve source so first frame transition works
+        &msaaClear,
+        IID_PPV_ARGS(&m_msaaRenderTarget)));
+        
+    m_device->CreateRenderTargetView(m_msaaRenderTarget.Get(), nullptr, rtvHandle);
 
     // SRV Heap
     D3D12_DESCRIPTOR_HEAP_DESC srvHeapDesc = {};
@@ -317,8 +359,12 @@ void FurRenderer::CreateShadersAndPSOs() {
     psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
     psoDesc.NumRenderTargets = 1;
     psoDesc.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
-    psoDesc.SampleDesc.Count = 1;
+    psoDesc.SampleDesc.Count = 4;
     psoDesc.SampleDesc.Quality = 0;
+    
+    // Enable Alpha to Coverage for Shells
+    psoDesc.BlendState.AlphaToCoverageEnable = TRUE;
+    
     // DSV is missing because we haven't created a depth buffer yet, but let's assume we'll use DXGI_FORMAT_D32_FLOAT
     // psoDesc.DSVFormat = DXGI_FORMAT_D32_FLOAT; 
 
@@ -328,6 +374,7 @@ void FurRenderer::CreateShadersAndPSOs() {
     ThrowIfFailed(m_device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&m_shellPSO)));
 
     D3D12_GRAPHICS_PIPELINE_STATE_DESC finPsoDesc = psoDesc;
+    finPsoDesc.BlendState.AlphaToCoverageEnable = FALSE; // Fins don't need A2C, they use solid geometry
     finPsoDesc.VS = CD3DX12_SHADER_BYTECODE(finVS.Get());
     finPsoDesc.GS = CD3DX12_SHADER_BYTECODE(finGS.Get());
     // Fin uses adjacency topology!
@@ -338,6 +385,8 @@ void FurRenderer::CreateShadersAndPSOs() {
     ComPtr<ID3DBlob> osmPS = CompileShader(L"shaders/osm_ps.hlsl", nullptr, "main", "ps_5_1");
 
     D3D12_GRAPHICS_PIPELINE_STATE_DESC osmPsoDesc = psoDesc;
+    osmPsoDesc.SampleDesc.Count = 1; // Shadows don't need MSAA
+    osmPsoDesc.BlendState.AlphaToCoverageEnable = FALSE;
     osmPsoDesc.PS = CD3DX12_SHADER_BYTECODE(osmPS.Get());
     osmPsoDesc.NumRenderTargets = 4;
     for(int i=0; i<4; i++) {
