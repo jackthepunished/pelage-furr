@@ -333,6 +333,8 @@ void FurRenderer::CreateShadersAndPSOs() {
     // Fin uses adjacency topology!
     finPsoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE; // Still triangles, just adjacency for input assembler
 
+    ThrowIfFailed(m_device->CreateGraphicsPipelineState(&finPsoDesc, IID_PPV_ARGS(&m_finPSO)));
+
     ComPtr<ID3DBlob> osmPS = CompileShader(L"shaders/osm_ps.hlsl", nullptr, "main", "ps_5_1");
 
     D3D12_GRAPHICS_PIPELINE_STATE_DESC osmPsoDesc = psoDesc;
@@ -508,7 +510,7 @@ void FurRenderer::BuildRenderItems() {
     CD3DX12_RESOURCE_BARRIER transitionToSRV = CD3DX12_RESOURCE_BARRIER::Transition(m_noiseTex.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
     m_commandList->ResourceBarrier(1, &transitionToSRV);
 
-    // Create SRV in heap
+    // Create SRV in heap for 5 slots to avoid uninitialized descriptor crashes
     D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
     srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
     srvDesc.Format = texDesc.Format;
@@ -517,7 +519,10 @@ void FurRenderer::BuildRenderItems() {
     srvDesc.Texture2D.MipLevels = 1;
     
     CD3DX12_CPU_DESCRIPTOR_HANDLE hDescriptor(m_cbvSrvUavHeap->GetCPUDescriptorHandleForHeapStart());
-    m_device->CreateShaderResourceView(m_noiseTex.Get(), &srvDesc, hDescriptor);
+    for(int i = 0; i < 5; ++i) {
+        m_device->CreateShaderResourceView(m_noiseTex.Get(), &srvDesc, hDescriptor);
+        hDescriptor.Offset(1, m_cbvSrvUavDescriptorSize);
+    }
 
     ThrowIfFailed(m_commandList->Close());
     ID3D12CommandList* cmdsLists[] = { m_commandList.Get() };

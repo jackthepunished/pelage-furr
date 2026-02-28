@@ -4,3 +4,4 @@ build/
 *.suo
 .cache/
 out/
+*.txt
