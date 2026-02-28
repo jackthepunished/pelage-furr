@@ -120,8 +120,8 @@ MeshData GeometryGen::CreateSphere(float radius, uint32_t sliceCount, uint32_t s
             v.Pos.z = radius * sinf(phi) * sinf(theta);
 
             v.Normal = v.Pos;
-            DirectX::XMVECTOR n = DirectX::XMVector3Normalize(DirectX::XMLoadFloat3(&v.Normal));
-            DirectX::XMStoreFloat3(&v.Normal, n);
+            XMVECTOR n = XMVector3Normalize(XMLoadFloat3(&v.Normal));
+            XMStoreFloat3(&v.Normal, n);
 
             v.UV.x = theta / (2.0f * XM_PI);
             v.UV.y = phi / XM_PI;

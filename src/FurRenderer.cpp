@@ -590,7 +590,13 @@ void FurRenderer::BuildRenderItems() {
     ThrowIfFailed(m_commandAllocator->Reset());
     ThrowIfFailed(m_commandList->Reset(m_commandAllocator.Get(), nullptr));
 
-    MeshData sphere = GeometryGen::CreateSphere(1.0f, 20, 20);
+    MeshData sphere = GeometryGen::LoadGLTF("assets/fur_carpet/scene.gltf");
+    
+    // Fallback if glTF fails to load
+    if (sphere.Vertices.empty()) {
+        OutputDebugStringA("Failed to load fur_carpet. Falling back to sphere.\n");
+        sphere = GeometryGen::CreateSphere(1.0f, 20, 20);
+    }
 
     const UINT vbByteSize = (UINT)sphere.Vertices.size() * sizeof(Vertex);
     const UINT ibByteSize = (UINT)sphere.Indices.size() * sizeof(uint32_t);

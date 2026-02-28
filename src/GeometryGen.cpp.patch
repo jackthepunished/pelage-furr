@@ -1,0 +1,7 @@
+--- src/GeometryGen.cpp
++++ src/GeometryGen.cpp
+@@ -122,2 +122,2 @@
+-            XMVECTOR n = XMVector3Normalize(XMLoadFloat3(&v.Normal));
+-            XMStoreFloat3(&v.Normal, n);
++            DirectX::XMVECTOR n = DirectX::XMVector3Normalize(DirectX::XMLoadFloat3(&v.Normal));
++            DirectX::XMStoreFloat3(&v.Normal, n);

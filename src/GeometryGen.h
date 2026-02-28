@@ -1,6 +1,7 @@
 #pragma once
 #include <vector>
 #include <map>
+#include <string>
 #include <DirectXMath.h>
 
 using namespace DirectX;
@@ -20,5 +21,6 @@ struct MeshData {
 class GeometryGen {
 public:
     static MeshData CreateSphere(float radius, uint32_t sliceCount, uint32_t stackCount);
+    static MeshData LoadGLTF(const std::string& path);
     static void GenerateAdjacency(MeshData& mesh);
 };
