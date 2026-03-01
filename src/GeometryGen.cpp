@@ -28,72 +28,134 @@ MeshData GeometryGen::LoadGLTF(const std::string& path) {
 
     if (model.meshes.empty()) return mesh;
 
-    const tinygltf::Mesh& gltfMesh = model.meshes[0];
-    if (gltfMesh.primitives.empty()) return mesh;
-    
-    const tinygltf::Primitive& primitive = gltfMesh.primitives[0];
-
-    // Get Accessors
-    const tinygltf::Accessor& posAccessor = model.accessors[primitive.attributes.at("POSITION")];
-    const tinygltf::Accessor& normAccessor = model.accessors[primitive.attributes.at("NORMAL")];
-    const tinygltf::Accessor& uvAccessor = model.accessors[primitive.attributes.at("TEXCOORD_0")];
-    const tinygltf::Accessor& indAccessor = model.accessors[primitive.indices];
-
-    // Get Buffer Views
-    const tinygltf::BufferView& posView = model.bufferViews[posAccessor.bufferView];
-    const tinygltf::BufferView& normView = model.bufferViews[normAccessor.bufferView];
-    const tinygltf::BufferView& uvView = model.bufferViews[uvAccessor.bufferView];
-    const tinygltf::BufferView& indView = model.bufferViews[indAccessor.bufferView];
-
-    // Get Buffers
-    const tinygltf::Buffer& posBuffer = model.buffers[posView.buffer];
-    const tinygltf::Buffer& normBuffer = model.buffers[normView.buffer];
-    const tinygltf::Buffer& uvBuffer = model.buffers[uvView.buffer];
-    const tinygltf::Buffer& indBuffer = model.buffers[indView.buffer];
-
-    // Extract Vertices
-    const float* positions = reinterpret_cast<const float*>(&posBuffer.data[posView.byteOffset + posAccessor.byteOffset]);
-    const float* normals = reinterpret_cast<const float*>(&normBuffer.data[normView.byteOffset + normAccessor.byteOffset]);
-    const float* uvs = reinterpret_cast<const float*>(&uvBuffer.data[uvView.byteOffset + uvAccessor.byteOffset]);
-
-    for (size_t i = 0; i < posAccessor.count; ++i) {
-        Vertex v;
-        v.Pos = XMFLOAT3(positions[i * 3 + 0], positions[i * 3 + 1], positions[i * 3 + 2]);
-        v.Normal = XMFLOAT3(normals[i * 3 + 0], normals[i * 3 + 1], normals[i * 3 + 2]);
-        v.UV = XMFLOAT2(uvs[i * 2 + 0], uvs[i * 2 + 1]);
+    for (const auto& gltfMesh : model.meshes) {
+        if (gltfMesh.primitives.empty()) continue;
         
-        // Fix coordinate system (glTF is right-handed Y-up, DirectX is left-handed Y-up)
-        v.Pos.z *= -1.0f;
-        v.Normal.z *= -1.0f;
+        for (const auto& primitive : gltfMesh.primitives) {
+            uint32_t vertexOffset = (uint32_t)mesh.Vertices.size();
 
-        mesh.Vertices.push_back(v);
-    }
+            // Get Accessors
+            const tinygltf::Accessor* posAccessor = nullptr;
+            const tinygltf::Accessor* normAccessor = nullptr;
+            const tinygltf::Accessor* uvAccessor = nullptr;
+            
+            if (primitive.attributes.count("POSITION")) {
+                posAccessor = &model.accessors[primitive.attributes.at("POSITION")];
+            } else {
+                continue; // Skip if no position
+            }
+            
+            if (primitive.attributes.count("NORMAL")) {
+                normAccessor = &model.accessors[primitive.attributes.at("NORMAL")];
+            }
+            if (primitive.attributes.count("TEXCOORD_0")) {
+                uvAccessor = &model.accessors[primitive.attributes.at("TEXCOORD_0")];
+            }
+            
+            if (primitive.indices < 0) continue; // Skip non-indexed geometry for simplicity
+            const tinygltf::Accessor& indAccessor = model.accessors[primitive.indices];
 
-    // Extract Indices
-    if (indAccessor.componentType == TINYGLTF_PARAMETER_TYPE_UNSIGNED_SHORT) {
-        const uint16_t* indices = reinterpret_cast<const uint16_t*>(&indBuffer.data[indView.byteOffset + indAccessor.byteOffset]);
-        for (size_t i = 0; i < indAccessor.count; i += 3) {
-            mesh.Indices.push_back(indices[i]);
-            mesh.Indices.push_back(indices[i + 2]);
-            mesh.Indices.push_back(indices[i + 1]);
-        }
-    } else if (indAccessor.componentType == TINYGLTF_PARAMETER_TYPE_UNSIGNED_INT) {
-        const uint32_t* indices = reinterpret_cast<const uint32_t*>(&indBuffer.data[indView.byteOffset + indAccessor.byteOffset]);
-        for (size_t i = 0; i < indAccessor.count; i += 3) {
-            mesh.Indices.push_back(indices[i]);
-            mesh.Indices.push_back(indices[i + 2]);
-            mesh.Indices.push_back(indices[i + 1]);
+            // Get Buffer Views
+            const tinygltf::BufferView& posView = model.bufferViews[posAccessor->bufferView];
+            const tinygltf::BufferView* normView = normAccessor ? &model.bufferViews[normAccessor->bufferView] : nullptr;
+            const tinygltf::BufferView* uvView = uvAccessor ? &model.bufferViews[uvAccessor->bufferView] : nullptr;
+            const tinygltf::BufferView& indView = model.bufferViews[indAccessor.bufferView];
+
+            // Get Buffers
+            const tinygltf::Buffer& posBuffer = model.buffers[posView.buffer];
+            const tinygltf::Buffer* normBuffer = normView ? &model.buffers[normView->buffer] : nullptr;
+            const tinygltf::Buffer* uvBuffer = uvView ? &model.buffers[uvView->buffer] : nullptr;
+            const tinygltf::Buffer& indBuffer = model.buffers[indView.buffer];
+
+            // Extract Vertices
+            const float* positions = reinterpret_cast<const float*>(&posBuffer.data[posView.byteOffset + posAccessor->byteOffset]);
+            const float* normals = normBuffer ? reinterpret_cast<const float*>(&normBuffer->data[normView->byteOffset + normAccessor->byteOffset]) : nullptr;
+            const float* uvs = uvBuffer ? reinterpret_cast<const float*>(&uvBuffer->data[uvView->byteOffset + uvAccessor->byteOffset]) : nullptr;
+
+            for (size_t i = 0; i < posAccessor->count; ++i) {
+                Vertex v;
+                v.Pos = XMFLOAT3(positions[i * 3 + 0], positions[i * 3 + 1], positions[i * 3 + 2]);
+                
+                if (normals) {
+                    v.Normal = XMFLOAT3(normals[i * 3 + 0], normals[i * 3 + 1], normals[i * 3 + 2]);
+                } else {
+                    v.Normal = XMFLOAT3(0, 1, 0); // Default normal
+                }
+                
+                if (uvs) {
+                    v.UV = XMFLOAT2(uvs[i * 2 + 0], uvs[i * 2 + 1]);
+                } else {
+                    v.UV = XMFLOAT2(0, 0);
+                }
+                
+                // Scale it down significantly since this particular fur_carpet Sketchfab model is absolutely massive
+                v.Pos.x *= 0.005f;
+                v.Pos.y *= 0.005f;
+                v.Pos.z *= 0.005f;
+                
+                // Fix coordinate system (glTF is right-handed Y-up, DirectX is left-handed Y-up)
+                v.Pos.z *= -1.0f;
+                v.Normal.z *= -1.0f;
+
+                mesh.Vertices.push_back(v);
+            }
+
+            // Extract Indices
+            if (indAccessor.componentType == TINYGLTF_PARAMETER_TYPE_UNSIGNED_SHORT) {
+                const uint16_t* indices = reinterpret_cast<const uint16_t*>(&indBuffer.data[indView.byteOffset + indAccessor.byteOffset]);
+                for (size_t i = 0; i < indAccessor.count; i += 3) {
+                    mesh.Indices.push_back(vertexOffset + indices[i]);
+                    mesh.Indices.push_back(vertexOffset + indices[i + 2]);
+                    mesh.Indices.push_back(vertexOffset + indices[i + 1]);
+                }
+            } else if (indAccessor.componentType == TINYGLTF_PARAMETER_TYPE_UNSIGNED_INT) {
+                const uint32_t* indices = reinterpret_cast<const uint32_t*>(&indBuffer.data[indView.byteOffset + indAccessor.byteOffset]);
+                for (size_t i = 0; i < indAccessor.count; i += 3) {
+                    mesh.Indices.push_back(vertexOffset + indices[i]);
+                    mesh.Indices.push_back(vertexOffset + indices[i + 2]);
+                    mesh.Indices.push_back(vertexOffset + indices[i + 1]);
+                }
+            } else if (indAccessor.componentType == TINYGLTF_PARAMETER_TYPE_UNSIGNED_BYTE) {
+                const uint8_t* indices = reinterpret_cast<const uint8_t*>(&indBuffer.data[indView.byteOffset + indAccessor.byteOffset]);
+                for (size_t i = 0; i < indAccessor.count; i += 3) {
+                    mesh.Indices.push_back(vertexOffset + indices[i]);
+                    mesh.Indices.push_back(vertexOffset + indices[i + 2]);
+                    mesh.Indices.push_back(vertexOffset + indices[i + 1]);
+                }
+            }
         }
     }
     
-    // Scale it up if the model is too small
-    for (auto& v : mesh.Vertices) {
-        v.Pos.x *= 2.0f;
-        v.Pos.y *= 2.0f;
-        v.Pos.z *= 2.0f;
+    std::cout << "Loaded " << mesh.Vertices.size() << " vertices and " << mesh.Indices.size() / 3 << " triangles." << std::endl;
+    
+    // Check if the mesh is massive and might cause memory/timeout issues
+    if (mesh.Vertices.size() > 500000) {
+        std::cout << "Warning: Mesh is extremely large. Downsampling for prototype performance..." << std::endl;
+        
+        // Simple fast decimation (take only every Nth triangle)
+        std::vector<uint32_t> downsampledIndices;
+        int step = 200; // Take 1 in 200 triangles (drastic cut)
+        for (size_t i = 0; i < mesh.Indices.size(); i += 3 * step) {
+            if (i + 2 < mesh.Indices.size()) {
+                downsampledIndices.push_back(mesh.Indices[i]);
+                downsampledIndices.push_back(mesh.Indices[i+1]);
+                downsampledIndices.push_back(mesh.Indices[i+2]);
+            }
+        }
+        mesh.Indices = downsampledIndices;
+        std::cout << "Downsampled to " << mesh.Indices.size() / 3 << " triangles." << std::endl;
     }
 
+        // Scale it down significantly since this particular fur_carpet Sketchfab model is absolutely massive
+        for(auto& v : mesh.Vertices) {
+            v.Pos.x *= 0.05f;
+            v.Pos.y *= 0.05f;
+            v.Pos.z *= 0.05f;
+        }
+
+    std::cout << "Generating Adjacency..." << std::endl;
     GenerateAdjacency(mesh);
+    std::cout << "Adjacency Generated." << std::endl;
     return mesh;
 }
 

@@ -38,8 +38,8 @@ void FurRenderer::Update(float deltaTime) {
     FrameCB frameData = {};
     
     // Rotating camera
-    float camRadius = 3.0f;
-    frameData.CameraPos = XMFLOAT3(camRadius * cosf(time * 0.5f), 1.0f, camRadius * sinf(time * 0.5f));
+    float camRadius = 15.0f; // Zoom out
+    frameData.CameraPos = XMFLOAT3(camRadius * cosf(time * 0.5f), 5.0f, camRadius * sinf(time * 0.5f));
     
     XMVECTOR pos = XMLoadFloat3(&frameData.CameraPos);
     XMVECTOR target = XMVectorSet(0.0f, 0.0f, 0.0f, 1.0f);
@@ -49,19 +49,25 @@ void FurRenderer::Update(float deltaTime) {
     XMMATRIX proj = XMMatrixPerspectiveFovLH(XM_PIDIV4, (float)m_width / m_height, 0.1f, 100.0f);
     
     frameData.ViewProj = XMMatrixTranspose(view * proj);
-    frameData.World = XMMatrixTranspose(XMMatrixIdentity()); // Or scaled
+    // Update frameData.Time and others ...
     
+    // Apply transformations
+    // Scale is baked into the vertices during load now, so we just rotate/translate if needed
+    XMMATRIX rot = XMMatrixRotationX(XM_PIDIV2); // Rotate 90 degrees on X (often needed for models)
+    XMMATRIX trans = XMMatrixTranslation(0.0f, 0.0f, 0.0f);
+    frameData.World = XMMatrixTranspose(rot * trans);
+
     frameData.Time = time;
     frameData.Gravity = XMFLOAT3(0.0f, -2.5f, 0.0f);
     frameData.WindStrength = 0.2f;
     frameData.WindDirection = XMFLOAT3(1.0f, 0.0f, 0.0f);
     
     // Light Frame
-    float lightRadius = 5.0f;
+    float lightRadius = 15.0f; // Scale up light for larger scene
     XMFLOAT3 lightPosF3 = XMFLOAT3(lightRadius, lightRadius, -lightRadius);
     XMVECTOR lightPos = XMLoadFloat3(&lightPosF3);
     XMMATRIX lightView = XMMatrixLookAtLH(lightPos, target, up);
-    XMMATRIX lightProj = XMMatrixOrthographicLH(5.0f, 5.0f, 0.1f, 20.0f);
+    XMMATRIX lightProj = XMMatrixOrthographicLH(25.0f, 25.0f, 0.1f, 50.0f); // Wider light ortho
     XMMATRIX lightVP = lightView * lightProj;
     frameData.LightViewProj = XMMatrixTranspose(lightVP);
 
