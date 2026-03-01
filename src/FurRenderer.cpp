@@ -542,13 +542,13 @@ void FurRenderer::CreateConstantBuffers() {
     ThrowIfFailed(m_lightFrameCB->Map(0, &readRange, reinterpret_cast<void**>(&m_lightFrameCBMapped)));
     ThrowIfFailed(m_furCB->Map(0, &readRange, reinterpret_cast<void**>(&m_furCBMapped)));
 
-    // Initialize Fur Parameters with recommended defaults
+    // Initialize Fur Parameters with recommended defaults for a Carpet
     FurCB initialFurData = {};
-    initialFurData.FurLength = 0.15f;
-    initialFurData.ShellCount = 32;
-    initialFurData.Density = 15.0f;
-    initialFurData.Thickness = 0.8f;
-    initialFurData.FurColor = XMFLOAT3(0.8f, 0.4f, 0.1f);
+    initialFurData.FurLength = 0.04f; // Short fibers
+    initialFurData.ShellCount = 48;   // High shell count for soft appearance
+    initialFurData.Density = 120.0f;  // Extremely dense
+    initialFurData.Thickness = 0.85f; // Keep tips reasonably sharp
+    initialFurData.FurColor = XMFLOAT3(0.85f, 0.82f, 0.78f); // Soft off-white/cream
     
     memcpy(m_furCBMapped, &initialFurData, sizeof(FurCB));
 }
@@ -629,9 +629,54 @@ void FurRenderer::BuildRenderItems() {
     m_indexCount = (UINT)sphere.Indices.size();
     m_indexCountAdj = (UINT)sphere.IndicesAdj.size();
 
-    // Create a dummy noise texture (2x2)
-    const UINT texWidth = 2, texHeight = 2;
-    float noiseData[texWidth * texHeight] = { 0.1f, 0.9f, 0.5f, 0.3f };
+    // Generate High-Resolution Cellular (Voronoi) Noise
+    const UINT texWidth = 512, texHeight = 512;
+    std::vector<float> noiseData(texWidth * texHeight);
+    
+    // Generate feature points
+    const int cells = 32;
+    struct Point2D { float x, y; };
+    std::vector<Point2D> points;
+    for(int i = 0; i < cells * cells; ++i) {
+        float px = (rand() % 1000) / 1000.0f;
+        float py = (rand() % 1000) / 1000.0f;
+        points.push_back({px, py});
+    }
+
+    // Evaluate Voronoi distance for each pixel
+    for (UINT y = 0; y < texHeight; ++y) {
+        for (UINT x = 0; x < texWidth; ++x) {
+            float u = (float)x / texWidth;
+            float v = (float)y / texHeight;
+            
+            float minDist = 1.0f;
+            
+            // Optimization: Only check neighboring cells (simplified here to all points for basic 32x32 grids)
+            // Need to wrap distance to make it seamlessly tileable
+            for (const auto& pt : points) {
+                float dx = std::abs(u - pt.x);
+                float dy = std::abs(v - pt.y);
+                if (dx > 0.5f) dx = 1.0f - dx; // Wrap around for tiling
+                if (dy > 0.5f) dy = 1.0f - dy; // Wrap around for tiling
+                
+                float dist = sqrt(dx * dx + dy * dy);
+                if (dist < minDist) {
+                    minDist = dist;
+                }
+            }
+            
+            // Invert so strands are thickest at the point centers
+            // Scale so maximum value is roughly 1.0
+            float cellMaxDist = sqrt(0.5f * 0.5f + 0.5f * 0.5f) / cells * 2.0f;
+            float val = 1.0f - (minDist / cellMaxDist);
+            if (val < 0.0f) val = 0.0f;
+            
+            // Optional: apply a power function to make the strands thinner and taper sharper
+            val = pow(val, 2.5f);
+            
+            noiseData[y * texWidth + x] = val;
+        }
+    }
     
     D3D12_RESOURCE_DESC texDesc = {};
     texDesc.MipLevels = 1;
@@ -658,7 +703,7 @@ void FurRenderer::BuildRenderItems() {
         D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&noiseUploadBuffer)));
 
     D3D12_SUBRESOURCE_DATA texResourceData = {};
-    texResourceData.pData = noiseData;
+    texResourceData.pData = noiseData.data();
     texResourceData.RowPitch = texWidth * sizeof(float);
     texResourceData.SlicePitch = texResourceData.RowPitch * texHeight;
 

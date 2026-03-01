@@ -42,12 +42,23 @@ VS_OUT main(VS_IN input) {
     // Normalized height 'h' goes from 0.0 (skin) to 1.0 (tips)
     float h = (float)input.InstanceID / (float)(g_Fur.ShellCount - 1);
     
+    // Create strand frizz/jitter using the UV and instance ID
+    // Magic numbers are just arbitrary non-collinear primes for hashing
+    float noise1 = frac(sin(dot(input.UV, float2(12.9898, 78.233))) * 43758.5453);
+    float noise2 = frac(sin(dot(input.UV, float2(39.346, 11.135))) * 43758.5453);
+    float3 jitter = float3(noise1 * 2.0 - 1.0, 0.0, noise2 * 2.0 - 1.0);
+    
     // Transform base position and normal to World Space FIRST
     float3 basePosWS = mul(float4(input.Pos, 1.0f), g_Frame.World).xyz;
     float3 normalWS = normalize(mul(input.Normal, (float3x3)g_Frame.World));
     
-    // Stage 1: Extrude vertex along normal in World Space
-    float3 extrusion = normalWS * h * g_Fur.FurLength;
+    // Apply jitter to the normal vector, scaling the jitter intensity by height 
+    // so roots stay attached but tips frizz out. 
+    // Scale down the overall frizz amount to keep it subtle
+    float3 frizzNormalWS = normalize(normalWS + jitter * h * 0.4f);
+    
+    // Stage 1: Extrude vertex along frizz normal in World Space
+    float3 extrusion = frizzNormalWS * h * g_Fur.FurLength;
     
     // Stage 2: Gravity droop (quadratic stiffness: t^2 weighting)
     float stiffness = h * h; 

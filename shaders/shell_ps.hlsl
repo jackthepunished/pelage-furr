@@ -101,8 +101,15 @@ float4 main(VS_OUT input) : SV_TARGET {
     
     float3 lighting = ambient + (diffuseLight + specularLight) * shadowFactor;
     
-    // Darken roots for pseudo-AO
-    lighting *= lerp(0.3f, 1.0f, input.NormalizedHeight);
+    // Darken roots for pseudo-AO using an exponential curve for subsurface feel
+    float ao = pow(input.NormalizedHeight, 0.4f); // steep curve for dark roots, bright tips
+    lighting *= lerp(0.1f, 1.0f, ao);
+    
+    // Fresnel Rim Lighting
+    float f0 = 0.04f;
+    float cosTheta = saturate(dot(input.NormalWS, V));
+    float rim = f0 + (1.0f - f0) * pow(1.0f - cosTheta, 5.0f);
+    lighting += g_Fur.FurColor * rim * 0.5f;
     
     return float4(lighting, 1.0f);
 }
